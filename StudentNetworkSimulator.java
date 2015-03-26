@@ -1,3 +1,6 @@
+import java.util.PriorityQueue;
+import java.util.Queue;
+
 public class StudentNetworkSimulator extends NetworkSimulator
 {
     /*
@@ -82,11 +85,11 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // these variables to send messages error free!  They can only hold
     // state information for A or B.
     // Also add any necessary methods (e.g. checksum of a String)
-    private int mSequence;
-    private int mAck;
+    private int mNextSequence = 0;
     private int mPacketsTransmitted = 0;
     private int mCorruptPacketCount = 0;
-
+    private boolean mMessageInTransit = false;
+    private static Queue<Message> mUnsentMessages = new PriorityQueue<Message>();
 
 
     // This is the constructor.  Don't touch!
@@ -106,13 +109,43 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // the receiving upper layer.
     protected void aOutput(Message message)
     {
-        String data = message.getData();
-        int checksum = createChecksum(1, 2, data);
+            if(!mMessageInTransit)
+            {
+                String data;
+                int sequence;
 
-        Packet packet = new Packet(mSequence, 0, checksum, data);
-        toLayer3(A, packet);
-        mPacketsTransmitted++;
-        System.out.println("Time when sent aOutput: " + getTime());
+                // There are unsent messages, handle them first
+                if(mUnsentMessages.size() > 0)
+                {
+                    // Make sure a message isn't lost
+                    if(!message.equals(mUnsentMessages.peek()))
+                        mUnsentMessages.add(message);
+
+                    data = mUnsentMessages.poll().getData();
+                    sequence = mNextSequence;
+                }
+                else
+                {
+                    data = message.getData();
+                    sequence = mNextSequence++;
+                }
+
+                int checksum = createChecksum(sequence, 1, data);
+
+                Packet packet = new Packet(sequence, 1, checksum, data);
+                toLayer3(A, packet);
+                mPacketsTransmitted++;
+
+                System.out.println("Time when sent aOutput: " + getTime());
+                System.out.println("aOutput packet: " + packet.toString() + "\n");
+
+                mMessageInTransit = true;
+                mUnsentMessages.add(new Message(data));
+            }
+            else
+            {
+                mUnsentMessages.add(message);
+            }
     }
 
     // This routine will be called whenever a packet sent from the B-side 
@@ -121,21 +154,27 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // sent from the B-side.
     protected void aInput(Packet packet)
     {
+        System.out.println("aInput received packet: " + packet.toString());
         System.out.println("Time when received aInput: " + getTime());
+
+        mMessageInTransit = false;
+
         if(isPacketCorrupt(packet))
         {
-            mCorruptPacketCount++;
+            String lastPacketData = mUnsentMessages.peek().getData();
+            toLayer5(A, lastPacketData);
+            System.out.println("aInput found corrupt packet resending.\n");
         }
         else
         {
-            stopTimer(A);
-            toLayer5(A, packet.getPayload());
+            mUnsentMessages.poll();
+            System.out.println(mPacketsTransmitted + " aInput packet was ACK, all good.\n");
         }
     }
     
     // This routine will be called when A's timer expires (thus generating a 
     // timer interrupt). You'll probably want to use this routine to control 
-    // the retransmission of packets. See startTimer() and stopTimer(), above,
+    // the retransmission of mUnsentMessages. See startTimer() and stopTimer(), above,
     // for how the timer is started and stopped. 
     protected void aTimerInterrupt()
     {
@@ -147,7 +186,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // of entity A).
     protected void aInit()
     {
-        mSequence = 0;
     }
     
     // This routine will be called whenever a packet sent from the B-side 
@@ -157,6 +195,22 @@ public class StudentNetworkSimulator extends NetworkSimulator
     protected void bInput(Packet packet)
     {
         System.out.println("Time when arrived bInput: " + getTime());
+        System.out.println("bInput packet: " + packet.toString());
+
+        if(isPacketCorrupt(packet))
+        {
+            // Set NAK for packet if corrupt
+            packet.setAcknum(0);
+            System.out.println("bInput detected corrupt packet, sending NAK\n");
+        }
+        else
+        {
+            // Leave ACK as is
+            toLayer5(B, packet.getPayload());
+            System.out.println("bInput packet is good, sending ACK\n");
+        }
+
+        toLayer3(B, packet);
     }
     
     // This routine will be called once, before any of your other B-side 
@@ -167,8 +221,12 @@ public class StudentNetworkSimulator extends NetworkSimulator
     {
     }
 
-    // Helper methods created
+    // Helper methods below
 
+    /**
+     * Creates checksum by adding the sequence, ack, and each
+     * character of the message.
+     */
     private int createChecksum(int sequence, int ack, String message)
     {
         int checksum = 0;
@@ -181,12 +239,16 @@ public class StudentNetworkSimulator extends NetworkSimulator
         return checksum;
     }
 
+    /**
+     * Determines whether the mUnsentMessages checksum is the same as
+     * the expected checksum.
+     */
     private boolean isPacketCorrupt(Packet packet)
     {
         int checksum = createChecksum(packet.getSeqnum(),
                                       packet.getAcknum(),
                                       packet.getPayload());
 
-        return checksum == packet.getChecksum();
+        return checksum != packet.getChecksum();
     }
 }
