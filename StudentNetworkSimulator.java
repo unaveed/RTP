@@ -1,5 +1,4 @@
-import java.util.PriorityQueue;
-import java.util.Queue;
+import java.util.Stack;
 
 public class StudentNetworkSimulator extends NetworkSimulator
 {
@@ -85,11 +84,12 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // these variables to send messages error free!  They can only hold
     // state information for A or B.
     // Also add any necessary methods (e.g. checksum of a String)
-    private int mNextSequence = 0;
+    private int mNextSequenceNumber = 0;
     private int mPacketsTransmitted = 0;
-    private int mCorruptPacketCount = 0;
     private boolean mMessageInTransit = false;
-    private static Queue<Message> mUnsentMessages = new PriorityQueue<Message>();
+    private boolean mRetrieveFromCache = false;
+    private Message mMessageToSend = null;
+    private Stack<Message> mMessageCache = new Stack<Message>();
 
 
     // This is the constructor.  Don't touch!
@@ -109,25 +109,24 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // the receiving upper layer.
     protected void aOutput(Message message)
     {
+        System.out.println("Incomming message at aOutput: " + message.getData());
+
             if(!mMessageInTransit)
             {
                 String data;
                 int sequence;
 
                 // There are unsent messages, handle them first
-                if(mUnsentMessages.size() > 0)
+                if(mRetrieveFromCache)
                 {
-                    // Make sure a message isn't lost
-                    if(!message.equals(mUnsentMessages.peek()))
-                        mUnsentMessages.add(message);
-
-                    data = mUnsentMessages.poll().getData();
-                    sequence = mNextSequence;
+                    data = mMessageCache.pop().getData();
+                    sequence = mNextSequenceNumber;
+                    mRetrieveFromCache = false;
                 }
                 else
                 {
                     data = message.getData();
-                    sequence = mNextSequence++;
+                    sequence = mNextSequenceNumber++;
                 }
 
                 int checksum = createChecksum(sequence, 1, data);
@@ -140,11 +139,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 System.out.println("aOutput packet: " + packet.toString() + "\n");
 
                 mMessageInTransit = true;
-                mUnsentMessages.add(new Message(data));
-            }
-            else
-            {
-                mUnsentMessages.add(message);
+                mMessageCache.push(new Message(data));
             }
     }
 
@@ -159,15 +154,16 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
         mMessageInTransit = false;
 
-        if(isPacketCorrupt(packet))
+        if(packet.getAcknum() != 1 || isPacketCorrupt(packet))
         {
-            String lastPacketData = mUnsentMessages.peek().getData();
+            mRetrieveFromCache = true;
+            String lastPacketData = mMessageCache.peek().getData();
             toLayer5(A, lastPacketData);
             System.out.println("aInput found corrupt packet resending.\n");
         }
         else
         {
-            mUnsentMessages.poll();
+            mMessageCache.pop();
             System.out.println(mPacketsTransmitted + " aInput packet was ACK, all good.\n");
         }
     }
