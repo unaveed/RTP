@@ -84,19 +84,24 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // these variables to send messages error free!  They can only hold
     // state information for A or B.
     // Also add any necessary methods (e.g. checksum of a String)
-    private int mSequenceNumber = 0;
-    private int mExpectedSequenceNumber = 0;
-    private boolean mMessageInTransit = false;
-    private boolean mRetrieveFromCache = false;
-    private Message mLastACKPacket = null;
-    private Stack<Message> mMessageCache = new Stack<Message>();
 
-    // Variables below are used for gathering statistics
-    private int mPacketsTransmitted = 0;
-    private int mNumberOfACK = 0;
-    private int mRetransmissions = 0;
-    private int mCorruptPacketsReceived = 0;
+    private int mSequenceNumber = 0;                // The sequence number of original packet, either 1 or 0
+    private int mExpectedSequenceNumber = 0;        // The sequence number the receiver expects to recieve
+    private int mLastACKSequence = -1;              // The last sequence that the receiver gave an ACK
+    private boolean mMessageInTransit = false;      // Prevents or allows aOutput to send messages
+    private boolean mRetrieveFromCache = false;     // Determines whether aOutput fetches from cache or layer5
+    private Packet mLastPacketSent = null;          // A copy of the last message sent by aOutput
+    private Stack<Message> mMessageCache =          // Cache that stores messages which have not received ACK
+                        new Stack<Message>();
 
+    // Variables used for gathering statistics
+    private int mPacketsTransmitted = 0;            // How many packets sent by aOutput
+    private int mNumberOfACK = 0;                   // Packets that received an ACK
+    private int mRetransmissions = 0;               // Packets that have been re-transmitted
+    private int mCorruptPacketsReceived = 0;        // Corrupt packets received
+    private int mTotalRTT = 0;                      // A sum of all RTTs
+    private int mRTTCount = 0;                      // Number of RTTs to calculate for average
+    private double mTimeSent = 0.0;                 // Keeps track of when the message was sent
 
 
     // This is the constructor.  Don't touch!
@@ -109,165 +114,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
     {
         super(numMessages, loss, corrupt, avgDelay, trace, seed);
     }
-
-    // This routine will be called whenever the upper layer at the sender [A]
-    // has a message to send.  It is the job of your protocol to insure that
-    // the data in such a message is delivered in-order, and correctly, to
-    // the receiving upper layer.
-    protected void aOutput(Message message)
-    {
-        System.out.println("Incomming message at aOutput: " + message.getData());
-
-            if(!mMessageInTransit)
-            {
-                String data;
-                int sequence;
-
-                // There are unsent messages, handle them first
-                if(mRetrieveFromCache)
-                {
-                    data = mMessageCache.pop().getData();
-                    sequence = mSequenceNumber;
-                    mRetrieveFromCache = false;
-                }
-                else
-                {
-                    data = message.getData();
-                    sequence = mSequenceNumber % 2;
-                }
-
-                int checksum = createChecksum(sequence, 1, data);
-
-                Packet packet = new Packet(sequence, 1, checksum, data);
-                toLayer3(A, packet);
-
-                mPacketsTransmitted++;
-                System.out.println("Time when sent aOutput: " + getTime());
-                System.out.println("aOutput packet: " + packet.toString() + "\n");
-
-                mMessageInTransit = true;
-                mMessageCache.push(new Message(data));
-            }
-
-        System.out.println("\n--------- Statistics --------\n" +
-                           "Number of packets transmitted: " + mPacketsTransmitted + "\n" +
-                           "Number of re-transmissions: " + mRetransmissions + "\n" +
-                           "Number of ACK packets: " + mNumberOfACK + "\n" +
-                           "Number of corrupt packets: " + mCorruptPacketsReceived + "\n");
-    }
-
-    // This routine will be called whenever a packet sent from the B-side 
-    // (i.e. as a result of a toLayer3() being done by a B-side procedure)
-    // arrives at the A-side.  "packet" is the (possibly corrupted) packet
-    // sent from the B-side.
-    protected void aInput(Packet packet)
-    {
-        System.out.println("aInput received packet: " + packet.toString());
-        System.out.println("Time when received aInput: " + getTime());
-
-        mMessageInTransit = false;
-
-        // Handle corrupt or NAK packets
-        if(packet.getAcknum() != 1 || isPacketCorrupt(packet))
-        {
-            mRetrieveFromCache = true;
-            String lastPacketData = mMessageCache.peek().getData();
-            toLayer5(A, lastPacketData);
-
-            mRetransmissions++;
-            System.out.println("aInput found corrupt packet or NAK, resending.\n");
-        }
-        else if (packet.getSeqnum() != mSequenceNumber)
-        {
-            mMessageCache.pop();
-            mRetransmissions++;
-        }
-        else
-        {
-            mLastACKPacket = mMessageCache.pop();
-            mNumberOfACK++;
-            mSequenceNumber = mSequenceNumber++ % 2;
-            System.out.println(mPacketsTransmitted + " aInput packet was ACK, all good.\n");
-        }
-    }
-    
-    // This routine will be called when A's timer expires (thus generating a 
-    // timer interrupt). You'll probably want to use this routine to control 
-    // the retransmission of mUnsentMessages. See startTimer() and stopTimer(), above,
-    // for how the timer is started and stopped. 
-    protected void aTimerInterrupt()
-    {
-    }
-    
-    // This routine will be called once, before any of your other A-side 
-    // routines are called. It can be used to do any required
-    // initialization (e.g. of member variables you add to control the state
-    // of entity A).
-    protected void aInit()
-    {
-    }
-    
-    // This routine will be called whenever a packet sent from the B-side 
-    // (i.e. as a result of a toLayer3() being done by an A-side procedure)
-    // arrives at the B-side.  "packet" is the (possibly corrupted) packet
-    // sent from the A-side.
-    protected void bInput(Packet packet)
-    {
-        System.out.println("Time when arrived bInput: " + getTime());
-        System.out.println("bInput packet: " + packet.toString());
-
-        int checksum;
-        String dummyData = "abcd";
-        Packet responsePacket;
-
-        if(isPacketCorrupt(packet))
-        {
-            // Set NAK for corrupt packet
-            checksum = createChecksum(mExpectedSequenceNumber, 0, dummyData);
-            responsePacket = new Packet(mExpectedSequenceNumber, 0, checksum, dummyData);
-
-            mCorruptPacketsReceived++;
-            System.out.println("bInput detected corrupt packet, sending NAK\n");
-        }
-        // Case for when a packet is out of order
-        else if(packet.getSeqnum() != mExpectedSequenceNumber)
-        {
-            // Create an ACK packet for the last sequence number
-            int lastACKSequence = (mExpectedSequenceNumber + 1) % 2;
-            checksum = createChecksum(lastACKSequence, 1, dummyData);
-            responsePacket = new Packet(lastACKSequence, 1, checksum, dummyData);
-
-            mRetransmissions++;
-        }
-        // Case for when the packet is not corrupt or out of order
-        else
-        {
-            // Data is good, send it up
-            toLayer5(B, packet.getPayload());
-
-            // Create ACK packet
-            checksum = createChecksum(mExpectedSequenceNumber, 1, dummyData);
-            responsePacket = new Packet(mExpectedSequenceNumber, 1, checksum, dummyData);
-
-            // Move the expectedSequence forward
-            mExpectedSequenceNumber = mExpectedSequenceNumber++ % 2;
-
-            mNumberOfACK++;
-            System.out.println("bInput packet is good, sending ACK\n");
-        }
-
-        toLayer3(B, responsePacket);
-    }
-    
-    // This routine will be called once, before any of your other B-side 
-    // routines are called. It can be used to do any required
-    // initialization (e.g. of member variables you add to control the state
-    // of entity B).
-    protected void bInit()
-    {
-    }
-
-    // Helper methods below
 
     /**
      * Creates checksum by adding the sequence, ack, and each
@@ -292,9 +138,194 @@ public class StudentNetworkSimulator extends NetworkSimulator
     private boolean isPacketCorrupt(Packet packet)
     {
         int checksum = createChecksum(packet.getSeqnum(),
-                                      packet.getAcknum(),
-                                      packet.getPayload());
+                packet.getAcknum(),
+                packet.getPayload());
 
         return checksum != packet.getChecksum();
+    }
+
+    /**
+     * Generate the next number in the sequence for either A or B
+     */
+    private void nextSequenceNumber(int side)
+    {
+        if (side == A)
+            mSequenceNumber = (mSequenceNumber + 1) % 2;
+        else
+            mExpectedSequenceNumber = (mExpectedSequenceNumber + 1) % 2;
+    }
+
+    // This routine will be called whenever the upper layer at the sender [A]
+    // has a message to send.  It is the job of your protocol to insure that
+    // the data in such a message is delivered in-order, and correctly, to
+    // the receiving upper layer.
+    protected void aOutput(Message message)
+    {
+        System.out.println("Incoming message at aOutput: " + message.getData());
+
+            if(!mMessageInTransit)
+            {
+                String data;
+
+                // There are unsent messages, handle them first
+                if(mRetrieveFromCache)
+                {
+                    data = mMessageCache.pop().getData();
+                    mRetrieveFromCache = false;
+                }
+                else
+                {
+                    data = message.getData();
+                }
+
+
+                int checksum = createChecksum(mSequenceNumber, 1, data);
+
+                // Create packet and send it to side B
+                Packet packet = new Packet(mSequenceNumber, 1, checksum, data);
+                toLayer3(A, packet);
+
+                mTimeSent = getTime();
+                startTimer(A, 20.0);
+                System.out.println("Time when sent aOutput: " + getTime());
+
+                // Update the last sent packet
+                mLastPacketSent = packet;
+                mMessageCache.push(new Message(data));
+
+                // Update state and statistics counter
+                mPacketsTransmitted++;
+                mMessageInTransit = true;
+                System.out.println("aOutput packet: " + packet.toString() + "\n");
+            }
+
+        System.out.println("\n--------- Statistics --------\n" +
+                           "Number of packets transmitted: " + mPacketsTransmitted + "\n" +
+                           "Number of re-transmissions: " + mRetransmissions + "\n" +
+                           "Number of ACK packets: " + mNumberOfACK + "\n" +
+                           "Number of corrupt packets: " + mCorruptPacketsReceived + "\n");
+    }
+
+    // This routine will be called whenever a packet sent from the B-side 
+    // (i.e. as a result of a toLayer3() being done by a B-side procedure)
+    // arrives at the A-side.  "packet" is the (possibly corrupted) packet
+    // sent from the B-side.
+    protected void aInput(Packet packet)
+    {
+        System.out.println("aInput received packet: " + packet.toString());
+        System.out.println("Time when received aInput: " + getTime());
+
+        mTotalRTT += getTime() - mTimeSent;
+        mRTTCount++;
+
+        mMessageInTransit = false;
+        boolean retransmission = mLastPacketSent.getSeqnum() != packet.getSeqnum();
+
+        // Let timer expire for corrupt packets
+        if (isPacketCorrupt(packet))
+        {
+            mRetrieveFromCache = true;
+            mCorruptPacketsReceived++;
+            System.out.println("aInput found corrupt packet, resending.\n");
+        }
+        // Let timer expire for re-transmitted packets and remove message from cache
+        else if (retransmission)
+        {
+            mMessageCache.pop();
+            nextSequenceNumber(A);
+            System.out.println("aInput found re-transmission, let timer expire.\n");
+        }
+        // Handle packets that are ACK
+        else
+        {
+            stopTimer(A);
+            mNumberOfACK++;
+            System.out.println(mPacketsTransmitted + " aInput packet was ACK, stopping timer.\n");
+
+            // Remove message since it has been received by side B
+            mMessageCache.pop();
+            nextSequenceNumber(A);
+            System.out.println("aInput sequence incremented now: " + mSequenceNumber);
+        }
+    }
+    
+    // This routine will be called when A's timer expires (thus generating a 
+    // timer interrupt). You'll probably want to use this routine to control 
+    // the retransmission of mUnsentMessages. See startTimer() and stopTimer(), above,
+    // for how the timer is started and stopped. 
+    protected void aTimerInterrupt()
+    {
+        toLayer3(A, mLastPacketSent);
+        startTimer(A, 20);
+        mTimeSent = getTime();
+        mPacketsTransmitted++;
+    }
+    
+    // This routine will be called once, before any of your other A-side 
+    // routines are called. It can be used to do any required
+    // initialization (e.g. of member variables you add to control the state
+    // of entity A).
+    protected void aInit()
+    {
+    }
+    
+    // This routine will be called whenever a packet sent from the B-side 
+    // (i.e. as a result of a toLayer3() being done by an A-side procedure)
+    // arrives at the B-side.  "packet" is the (possibly corrupted) packet
+    // sent from the A-side.
+    protected void bInput(Packet packet)
+    {
+        System.out.println("Time when arrived bInput: " + getTime());
+        System.out.println("bInput packet: " + packet.toString());
+
+        String dummyData = "hello";
+        int checksum;
+        Packet responsePacket;
+
+        boolean corrupt = isPacketCorrupt(packet);
+        boolean retransmission = packet.getSeqnum() != mExpectedSequenceNumber;
+
+        if(corrupt || retransmission)
+        {
+            checksum = createChecksum(mLastACKSequence, 1, dummyData);
+            responsePacket = new Packet(mLastACKSequence, 1, checksum, dummyData);
+
+            if(corrupt)
+            {
+                mCorruptPacketsReceived++;
+                System.out.println("bInput detected corrupt packet, sending sequence of lastACK\n");
+            }
+            else
+            {
+                mRetransmissions++;
+                System.out.println("bInput received retransmitted packet, sending sequence of lastACK\n");
+            }
+        }
+        else
+        {
+            // Data is good, send it up
+            toLayer5(B, packet.getPayload());
+
+            // Create ACK packet
+            checksum = createChecksum(mExpectedSequenceNumber, 1, dummyData);
+            responsePacket = new Packet(mExpectedSequenceNumber, 1, checksum, dummyData);
+
+            // Move the expectedSequence forward
+            mLastACKSequence = mExpectedSequenceNumber;
+            nextSequenceNumber(B);
+            System.out.println("bInput, incremented nextSequence before: "
+                    + mLastACKSequence + "and now " + mExpectedSequenceNumber);
+            System.out.println("bInput packet is good, sending ACK\n");
+        }
+
+        toLayer3(B, responsePacket);
+    }
+    
+    // This routine will be called once, before any of your other B-side 
+    // routines are called. It can be used to do any required
+    // initialization (e.g. of member variables you add to control the state
+    // of entity B).
+    protected void bInit()
+    {
     }
 }
