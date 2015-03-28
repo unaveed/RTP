@@ -192,7 +192,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 String data;
 
                 // There are unsent messages, handle them first
-                if(mRetrieveFromCache)
+                if(mRetrieveFromCache && !mMessageCache.isEmpty())
                 {
                     data = mMessageCache.pop().getData();
                     mRetrieveFromCache = false;
@@ -210,7 +210,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 toLayer3(A, packet);
 
                 mTimeSent = getTime();
-                startTimer(A, 20.0);
+                startTimer(A, 50.0);
 
                 // Update the last sent packet
                 mLastPacketSent = packet;
@@ -262,7 +262,8 @@ public class StudentNetworkSimulator extends NetworkSimulator
             System.out.println(mPacketsTransmitted + " aInput packet was ACK, stopping timer.\n");
 
             // Remove message since it has been received by side B
-            mMessageCache.pop();
+            if(!mMessageCache.isEmpty())
+                mMessageCache.pop();
             mRetrieveFromCache = false;
             nextSequenceNumber(A);
         }
@@ -274,9 +275,10 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // for how the timer is started and stopped. 
     protected void aTimerInterrupt()
     {
+        System.out.println("Timer expired, re-sending packet.");
         toLayer3(A, mLastPacketSent);
 
-        startTimer(A, 20);
+        startTimer(A, 50);
         mTimeSent = getTime();
         mPacketsTransmitted++;
 
