@@ -84,12 +84,19 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // these variables to send messages error free!  They can only hold
     // state information for A or B.
     // Also add any necessary methods (e.g. checksum of a String)
-    private int mNextSequenceNumber = 0;
-    private int mPacketsTransmitted = 0;
+    private int mSequenceNumber = 0;
+    private int mExpectedSequenceNumber = 0;
     private boolean mMessageInTransit = false;
     private boolean mRetrieveFromCache = false;
-    private Message mMessageToSend = null;
+    private Message mLastACKPacket = null;
     private Stack<Message> mMessageCache = new Stack<Message>();
+
+    // Variables below are used for gathering statistics
+    private int mPacketsTransmitted = 0;
+    private int mNumberOfACK = 0;
+    private int mRetransmissions = 0;
+    private int mCorruptPacketsReceived = 0;
+
 
 
     // This is the constructor.  Don't touch!
@@ -120,27 +127,33 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 if(mRetrieveFromCache)
                 {
                     data = mMessageCache.pop().getData();
-                    sequence = mNextSequenceNumber;
+                    sequence = mSequenceNumber;
                     mRetrieveFromCache = false;
                 }
                 else
                 {
                     data = message.getData();
-                    sequence = mNextSequenceNumber++;
+                    sequence = mSequenceNumber % 2;
                 }
 
                 int checksum = createChecksum(sequence, 1, data);
 
                 Packet packet = new Packet(sequence, 1, checksum, data);
                 toLayer3(A, packet);
-                mPacketsTransmitted++;
 
+                mPacketsTransmitted++;
                 System.out.println("Time when sent aOutput: " + getTime());
                 System.out.println("aOutput packet: " + packet.toString() + "\n");
 
                 mMessageInTransit = true;
                 mMessageCache.push(new Message(data));
             }
+
+        System.out.println("\n--------- Statistics --------\n" +
+                           "Number of packets transmitted: " + mPacketsTransmitted + "\n" +
+                           "Number of re-transmissions: " + mRetransmissions + "\n" +
+                           "Number of ACK packets: " + mNumberOfACK + "\n" +
+                           "Number of corrupt packets: " + mCorruptPacketsReceived + "\n");
     }
 
     // This routine will be called whenever a packet sent from the B-side 
@@ -154,16 +167,26 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
         mMessageInTransit = false;
 
+        // Handle corrupt or NAK packets
         if(packet.getAcknum() != 1 || isPacketCorrupt(packet))
         {
             mRetrieveFromCache = true;
             String lastPacketData = mMessageCache.peek().getData();
             toLayer5(A, lastPacketData);
-            System.out.println("aInput found corrupt packet resending.\n");
+
+            mRetransmissions++;
+            System.out.println("aInput found corrupt packet or NAK, resending.\n");
+        }
+        else if (packet.getSeqnum() != mSequenceNumber)
+        {
+            mMessageCache.pop();
+            mRetransmissions++;
         }
         else
         {
-            mMessageCache.pop();
+            mLastACKPacket = mMessageCache.pop();
+            mNumberOfACK++;
+            mSequenceNumber = mSequenceNumber++ % 2;
             System.out.println(mPacketsTransmitted + " aInput packet was ACK, all good.\n");
         }
     }
@@ -193,20 +216,47 @@ public class StudentNetworkSimulator extends NetworkSimulator
         System.out.println("Time when arrived bInput: " + getTime());
         System.out.println("bInput packet: " + packet.toString());
 
+        int checksum;
+        String dummyData = "abcd";
+        Packet responsePacket;
+
         if(isPacketCorrupt(packet))
         {
-            // Set NAK for packet if corrupt
-            packet.setAcknum(0);
+            // Set NAK for corrupt packet
+            checksum = createChecksum(mExpectedSequenceNumber, 0, dummyData);
+            responsePacket = new Packet(mExpectedSequenceNumber, 0, checksum, dummyData);
+
+            mCorruptPacketsReceived++;
             System.out.println("bInput detected corrupt packet, sending NAK\n");
         }
+        // Case for when a packet is out of order
+        else if(packet.getSeqnum() != mExpectedSequenceNumber)
+        {
+            // Create an ACK packet for the last sequence number
+            int lastACKSequence = (mExpectedSequenceNumber + 1) % 2;
+            checksum = createChecksum(lastACKSequence, 1, dummyData);
+            responsePacket = new Packet(lastACKSequence, 1, checksum, dummyData);
+
+            mRetransmissions++;
+        }
+        // Case for when the packet is not corrupt or out of order
         else
         {
-            // Leave ACK as is
+            // Data is good, send it up
             toLayer5(B, packet.getPayload());
+
+            // Create ACK packet
+            checksum = createChecksum(mExpectedSequenceNumber, 1, dummyData);
+            responsePacket = new Packet(mExpectedSequenceNumber, 1, checksum, dummyData);
+
+            // Move the expectedSequence forward
+            mExpectedSequenceNumber = mExpectedSequenceNumber++ % 2;
+
+            mNumberOfACK++;
             System.out.println("bInput packet is good, sending ACK\n");
         }
 
-        toLayer3(B, packet);
+        toLayer3(B, responsePacket);
     }
     
     // This routine will be called once, before any of your other B-side 
