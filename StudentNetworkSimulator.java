@@ -85,23 +85,25 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // state information for A or B.
     // Also add any necessary methods (e.g. checksum of a String)
 
-    private int mSequenceNumber = 0;                // The sequence number of original packet, either 1 or 0
-    private int mExpectedSequenceNumber = 0;        // The sequence number the receiver expects to recieve
-    private int mLastACKSequence = -1;              // The last sequence that the receiver gave an ACK
-    private boolean mMessageInTransit = false;      // Prevents or allows aOutput to send messages
-    private boolean mRetrieveFromCache = false;     // Determines whether aOutput fetches from cache or layer5
-    private Packet mLastPacketSent = null;          // A copy of the last message sent by aOutput
-    private Stack<Message> mMessageCache =          // Cache that stores messages which have not received ACK
-                        new Stack<Message>();
+    private int mSequenceNumber;            // The sequence number of original packet, either 1 or 0
+    private int mExpectedSequenceNumber;    // The sequence number the receiver expects to receive
+    private int mLastACKSequence;           // The last sequence that the receiver gave an ACK
+    private boolean mMessageInTransit;      // Prevents or allows aOutput to send messages
+    private boolean mRetrieveFromCache;     // Determines whether aOutput fetches from cache or layer5
+    private Packet mLastPacketSent;         // A copy of the last message sent by aOutput
+    private Stack<Message> mMessageCache;   // Cache that stores messages which have not received ACK
 
     // Variables used for gathering statistics
-    private int mPacketsTransmitted = 0;            // How many packets sent by aOutput
-    private int mNumberOfACK = 0;                   // Packets that received an ACK
-    private int mRetransmissions = 0;               // Packets that have been re-transmitted
-    private int mCorruptPacketsReceived = 0;        // Corrupt packets received
-    private int mTotalRTT = 0;                      // A sum of all RTTs
-    private int mRTTCount = 0;                      // Number of RTTs to calculate for average
-    private double mTimeSent = 0.0;                 // Keeps track of when the message was sent
+    private int mPacketsTransmitted;        // How many packets sent by aOutput
+    private int mNumberOfACK;               // Packets that received an ACK
+    private int mRetransmissions;           // Packets that have been re-transmitted
+    private int mCorruptPacketsReceived;    // Corrupt packets received
+    private int mNumberOfPacketsDropped;    // Number of packets dropped
+    private int mTotalRTT;                  // A sum of all RTTs
+    private int mRTTCount;                  // Number of RTTs to calculate for average
+    private double mTimeSent;               // Keeps track of when the message was sent
+    private boolean mPacketDropped;         // Determines whether a packet has been dropped
+
 
 
     // This is the constructor.  Don't touch!
@@ -113,6 +115,15 @@ public class StudentNetworkSimulator extends NetworkSimulator
                                    long seed)
     {
         super(numMessages, loss, corrupt, avgDelay, trace, seed);
+    }
+
+    @Override
+    public void runSimulator()
+    {
+        super.runSimulator();
+
+        // Print statistics when program stops
+        printStatistics();
     }
 
     /**
@@ -155,14 +166,27 @@ public class StudentNetworkSimulator extends NetworkSimulator
             mExpectedSequenceNumber = (mExpectedSequenceNumber + 1) % 2;
     }
 
+    /**
+     * Calculates the average RTT and displays all the statistics gathered
+     */
+    private void printStatistics()
+    {
+        double averageTime = mRTTCount > 0 ? (mTotalRTT / (double) mRTTCount) : 0.0;
+        System.out.println("Statistics\n" +
+                "Number of packets transmitted: " + mPacketsTransmitted + "\n" +
+                "Number of re-transmissions: " + mRetransmissions + "\n" +
+                "Number of ACK packets: " + mNumberOfACK + "\n" +
+                "Number of corrupt packets: " + mCorruptPacketsReceived + "\n" +
+                "Number of packets dropped: " + mNumberOfPacketsDropped + "\n" +
+                "Average RTT: " + averageTime);
+    }
+
     // This routine will be called whenever the upper layer at the sender [A]
     // has a message to send.  It is the job of your protocol to insure that
     // the data in such a message is delivered in-order, and correctly, to
     // the receiving upper layer.
     protected void aOutput(Message message)
     {
-        System.out.println("Incoming message at aOutput: " + message.getData());
-
             if(!mMessageInTransit)
             {
                 String data;
@@ -187,7 +211,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
                 mTimeSent = getTime();
                 startTimer(A, 20.0);
-                System.out.println("Time when sent aOutput: " + getTime());
 
                 // Update the last sent packet
                 mLastPacketSent = packet;
@@ -196,14 +219,9 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 // Update state and statistics counter
                 mPacketsTransmitted++;
                 mMessageInTransit = true;
+                mPacketDropped = true;
                 System.out.println("aOutput packet: " + packet.toString() + "\n");
             }
-
-        System.out.println("\n--------- Statistics --------\n" +
-                           "Number of packets transmitted: " + mPacketsTransmitted + "\n" +
-                           "Number of re-transmissions: " + mRetransmissions + "\n" +
-                           "Number of ACK packets: " + mNumberOfACK + "\n" +
-                           "Number of corrupt packets: " + mCorruptPacketsReceived + "\n");
     }
 
     // This routine will be called whenever a packet sent from the B-side 
@@ -213,12 +231,13 @@ public class StudentNetworkSimulator extends NetworkSimulator
     protected void aInput(Packet packet)
     {
         System.out.println("aInput received packet: " + packet.toString());
-        System.out.println("Time when received aInput: " + getTime());
 
         mTotalRTT += getTime() - mTimeSent;
         mRTTCount++;
 
         mMessageInTransit = false;
+        mPacketDropped = false;
+
         boolean retransmission = mLastPacketSent.getSeqnum() != packet.getSeqnum();
 
         // Let timer expire for corrupt packets
@@ -231,7 +250,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
         // Let timer expire for re-transmitted packets and remove message from cache
         else if (retransmission)
         {
-            mMessageCache.pop();
             nextSequenceNumber(A);
             System.out.println("aInput found re-transmission, let timer expire.\n");
         }
@@ -244,8 +262,8 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
             // Remove message since it has been received by side B
             mMessageCache.pop();
+            mRetrieveFromCache = false;
             nextSequenceNumber(A);
-            System.out.println("aInput sequence incremented now: " + mSequenceNumber);
         }
     }
     
@@ -259,6 +277,9 @@ public class StudentNetworkSimulator extends NetworkSimulator
         startTimer(A, 20);
         mTimeSent = getTime();
         mPacketsTransmitted++;
+
+        if(mPacketDropped)
+            mNumberOfPacketsDropped++;
     }
     
     // This routine will be called once, before any of your other A-side 
@@ -267,6 +288,18 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // of entity A).
     protected void aInit()
     {
+        mSequenceNumber = 0;
+        mMessageInTransit = false;
+        mRetrieveFromCache = false;
+        mLastPacketSent = null;
+        mMessageCache = new Stack<Message>();
+        mPacketsTransmitted = 0;
+        mNumberOfACK = 0;
+        mNumberOfPacketsDropped = 0;
+        mTotalRTT = 0;
+        mRTTCount = 0;
+        mTimeSent = 0.0;
+        mPacketDropped = false;
     }
     
     // This routine will be called whenever a packet sent from the B-side 
@@ -275,7 +308,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // sent from the A-side.
     protected void bInput(Packet packet)
     {
-        System.out.println("Time when arrived bInput: " + getTime());
         System.out.println("bInput packet: " + packet.toString());
 
         String dummyData = "hello";
@@ -298,7 +330,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
             else
             {
                 mRetransmissions++;
-                System.out.println("bInput received retransmitted packet, sending sequence of lastACK\n");
+                System.out.println("bInput detected retransmitted packet, sending sequence of lastACK\n");
             }
         }
         else
@@ -313,9 +345,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
             // Move the expectedSequence forward
             mLastACKSequence = mExpectedSequenceNumber;
             nextSequenceNumber(B);
-            System.out.println("bInput, incremented nextSequence before: "
-                    + mLastACKSequence + "and now " + mExpectedSequenceNumber);
-            System.out.println("bInput packet is good, sending ACK\n");
+            System.out.println("bInput packet is error free, sending ACK.\n");
         }
 
         toLayer3(B, responsePacket);
@@ -327,5 +357,9 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // of entity B).
     protected void bInit()
     {
+        mExpectedSequenceNumber = 0;
+        mLastACKSequence = -1;
+        mRetransmissions = 0;
+        mCorruptPacketsReceived = 0;
     }
 }
