@@ -220,7 +220,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 mPacketsTransmitted++;
                 mMessageInTransit = true;
                 mPacketDropped = true;
-                System.out.println("aOutput packet: " + packet.toString() + "\n");
+                System.out.println("aOutput sent packet: " + packet.toString() + "\n");
             }
     }
 
@@ -232,6 +232,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     {
         System.out.println("aInput received packet: " + packet.toString());
 
+        // Aggregate time round trips for each packet sent/received
         mTotalRTT += getTime() - mTimeSent;
         mRTTCount++;
 
@@ -274,6 +275,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     protected void aTimerInterrupt()
     {
         toLayer3(A, mLastPacketSent);
+
         startTimer(A, 20);
         mTimeSent = getTime();
         mPacketsTransmitted++;
@@ -308,7 +310,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // sent from the A-side.
     protected void bInput(Packet packet)
     {
-        System.out.println("bInput packet: " + packet.toString());
+        System.out.println("bInput received packet: " + packet.toString());
 
         String dummyData = "hello";
         int checksum;
@@ -325,12 +327,12 @@ public class StudentNetworkSimulator extends NetworkSimulator
             if(corrupt)
             {
                 mCorruptPacketsReceived++;
-                System.out.println("bInput detected corrupt packet, sending sequence of lastACK\n");
+                System.out.println("bInput: detected corrupt packet, sending sequence of lastACK\n");
             }
             else
             {
                 mRetransmissions++;
-                System.out.println("bInput detected retransmitted packet, sending sequence of lastACK\n");
+                System.out.println("bInput: detected retransmitted packet, sending sequence of lastACK\n");
             }
         }
         else
@@ -345,7 +347,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
             // Move the expectedSequence forward
             mLastACKSequence = mExpectedSequenceNumber;
             nextSequenceNumber(B);
-            System.out.println("bInput packet is error free, sending ACK.\n");
+            System.out.println("bInput: packet is error free, sending ACK.\n");
         }
 
         toLayer3(B, responsePacket);
