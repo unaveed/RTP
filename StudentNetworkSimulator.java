@@ -1,3 +1,4 @@
+import java.util.Queue;
 import java.util.Stack;
 
 public class StudentNetworkSimulator extends NetworkSimulator
@@ -85,13 +86,18 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // state information for A or B.
     // Also add any necessary methods (e.g. checksum of a String)
 
-    private int mSequenceNumber;            // The sequence number of original packet, either 1 or 0
+    private final int ACK = 1;
+    private final int WINDOW_SIZE = 50;
+
+    private int mNextSequence;              // The next sequence number of packets to be sent out
+    private int mBase;                      // The sequence number of the last unacknowledged packet
     private int mExpectedSequenceNumber;    // The sequence number the receiver expects to receive
     private int mLastACKSequence;           // The last sequence that the receiver gave an ACK
-    private boolean mMessageInTransit;      // Prevents or allows aOutput to send messages
     private boolean mRetrieveFromCache;     // Determines whether aOutput fetches from cache or layer5
+    private boolean mWindowFull;            // Determines whether the window is full
     private Packet mLastPacketSent;         // A copy of the last message sent by aOutput
     private Stack<Message> mMessageCache;   // Cache that stores messages which have not received ACK
+    private Queue<Message> mMessageBuffer;  // Buffer to hold the messages that need to be sent
 
     // Variables used for gathering statistics
     private int mPacketsTransmitted;        // How many packets sent by aOutput
@@ -161,7 +167,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     private void nextSequenceNumber(int side)
     {
         if (side == A)
-            mSequenceNumber = (mSequenceNumber + 1) % 2;
+            mNextSequence = (mNextSequence + 1) % 2;
         else
             mExpectedSequenceNumber = (mExpectedSequenceNumber + 1) % 2;
     }
@@ -187,7 +193,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // the receiving upper layer.
     protected void aOutput(Message message)
     {
-            if(!mMessageInTransit)
+            if(!mWindowFull)
             {
                 String data;
 
@@ -203,10 +209,10 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 }
 
 
-                int checksum = createChecksum(mSequenceNumber, 1, data);
+                int checksum = createChecksum(mNextSequence, 1, data);
 
                 // Create packet and send it to side B
-                Packet packet = new Packet(mSequenceNumber, 1, checksum, data);
+                Packet packet = new Packet(mNextSequence, 1, checksum, data);
                 toLayer3(A, packet);
 
                 mTimeSent = getTime();
@@ -218,7 +224,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
                 // Update state and statistics counter
                 mPacketsTransmitted++;
-                mMessageInTransit = true;
                 mPacketDropped = true;
                 System.out.println("aOutput sent packet: " + packet.toString() + "\n");
             }
@@ -236,7 +241,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
         mTotalRTT += getTime() - mTimeSent;
         mRTTCount++;
 
-        mMessageInTransit = false;
+//        mMessageInTransit = false;
         mPacketDropped = false;
 
         boolean retransmission = mLastPacketSent.getSeqnum() != packet.getSeqnum();
@@ -292,8 +297,8 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // of entity A).
     protected void aInit()
     {
-        mSequenceNumber = 0;
-        mMessageInTransit = false;
+        mNextSequence = 0;
+        mWindowFull = false;
         mRetrieveFromCache = false;
         mLastPacketSent = null;
         mMessageCache = new Stack<Message>();
