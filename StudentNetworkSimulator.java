@@ -1,5 +1,5 @@
 import java.util.Queue;
-import java.util.Stack;
+import java.util.concurrent.ArrayBlockingQueue;
 
 public class StudentNetworkSimulator extends NetworkSimulator
 {
@@ -93,11 +93,9 @@ public class StudentNetworkSimulator extends NetworkSimulator
     private int mBase;                      // The sequence number of the last unacknowledged packet
     private int mExpectedSequenceNumber;    // The sequence number the receiver expects to receive
     private int mLastACKSequence;           // The last sequence that the receiver gave an ACK
-    private boolean mRetrieveFromCache;     // Determines whether aOutput fetches from cache or layer5
     private boolean mWindowFull;            // Determines whether the window is full
-    private Packet mLastPacketSent;         // A copy of the last message sent by aOutput
-    private Stack<Message> mMessageCache;   // Cache that stores messages which have not received ACK
-    private Queue<Message> mMessageBuffer;  // Buffer to hold the messages that need to be sent
+    private boolean mTimerAvailable;        // Used to coordinate whether the timer is currently in use
+    private Queue<Packet> mPacketBuffer;    // Buffer to hold the messages that have no received ACK
 
     // Variables used for gathering statistics
     private int mPacketsTransmitted;        // How many packets sent by aOutput
@@ -108,7 +106,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
     private int mTotalRTT;                  // A sum of all RTTs
     private int mRTTCount;                  // Number of RTTs to calculate for average
     private double mTimeSent;               // Keeps track of when the message was sent
-    private boolean mPacketDropped;         // Determines whether a packet has been dropped
 
 
 
@@ -149,6 +146,32 @@ public class StudentNetworkSimulator extends NetworkSimulator
     }
 
     /**
+     * Helper method to create packets so code re-use can be cut down.
+     */
+    private Packet createPacket(int sequence, String payload)
+    {
+        int checksum = createChecksum(sequence, ACK, payload);
+        return new Packet(sequence, ACK, checksum, payload);
+    }
+
+    /**
+     * Helper method to add Packets to queue and deal with state variables as well as exceptions
+     */
+    private boolean addToQueue(Packet packet)
+    {
+        try
+        {
+            mPacketBuffer.add(packet);
+            return true;
+        }
+        catch(IllegalStateException e)
+        {
+            mWindowFull = true;
+            return false;
+        }
+    }
+
+    /**
      * Determines whether the mUnsentMessages checksum is the same as
      * the expected checksum.
      */
@@ -159,17 +182,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 packet.getPayload());
 
         return checksum != packet.getChecksum();
-    }
-
-    /**
-     * Generate the next number in the sequence for either A or B
-     */
-    private void nextSequenceNumber(int side)
-    {
-        if (side == A)
-            mNextSequence = (mNextSequence + 1) % 2;
-        else
-            mExpectedSequenceNumber = (mExpectedSequenceNumber + 1) % 2;
     }
 
     /**
@@ -193,40 +205,38 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // the receiving upper layer.
     protected void aOutput(Message message)
     {
-            if(!mWindowFull)
+        if(!mWindowFull && (mNextSequence - mBase) <= WINDOW_SIZE)
+        {
+             // Create packet and send it to side B
+            Packet packet = createPacket(mNextSequence++, message.getData());
+            if(addToQueue(packet))
             {
-                String data;
-
-                // There are unsent messages, handle them first
-                if(mRetrieveFromCache && !mMessageCache.isEmpty())
-                {
-                    data = mMessageCache.pop().getData();
-                    mRetrieveFromCache = false;
-                }
-                else
-                {
-                    data = message.getData();
-                }
-
-
-                int checksum = createChecksum(mNextSequence, 1, data);
-
-                // Create packet and send it to side B
-                Packet packet = new Packet(mNextSequence, 1, checksum, data);
                 toLayer3(A, packet);
-
                 mTimeSent = getTime();
-                startTimer(A, 50.0);
-
-                // Update the last sent packet
-                mLastPacketSent = packet;
-                mMessageCache.push(new Message(data));
 
                 // Update state and statistics counter
                 mPacketsTransmitted++;
-                mPacketDropped = true;
                 System.out.println("aOutput sent packet: " + packet.toString() + "\n");
+
+                if(mTimerAvailable)
+                {
+                    startTimer(A, 100.0);
+                    System.out.println("aOutput: started timer\n");
+                    mTimerAvailable = false;
+                }
             }
+            else
+            {
+                mNumberOfPacketsDropped++;
+                System.out.println("aOutput: Buffer is full, dropping packet");
+            }
+
+        }
+        else
+        {
+            mNumberOfPacketsDropped++;
+            System.out.println("aOutput: Buffer is full, dropping message");
+        }
     }
 
     // This routine will be called whenever a packet sent from the B-side 
@@ -241,36 +251,28 @@ public class StudentNetworkSimulator extends NetworkSimulator
         mTotalRTT += getTime() - mTimeSent;
         mRTTCount++;
 
-//        mMessageInTransit = false;
-        mPacketDropped = false;
-
-        boolean retransmission = mLastPacketSent.getSeqnum() != packet.getSeqnum();
+        boolean retransmission = mBase != packet.getSeqnum();
 
         // Let timer expire for corrupt packets
-        if (isPacketCorrupt(packet))
+        if (isPacketCorrupt(packet) || (packet.getSeqnum() >= mNextSequence))
         {
-            mRetrieveFromCache = true;
             mCorruptPacketsReceived++;
-            System.out.println("aInput found corrupt packet, resending.\n");
-        }
-        // Let timer expire for re-transmitted packets and remove message from cache
-        else if (retransmission)
-        {
-            nextSequenceNumber(A);
-            System.out.println("aInput found re-transmission, let timer expire.\n");
+            System.out.println("aInput found corrupt or out of order packet, let timer expire.\n");
         }
         // Handle packets that are ACK
         else
         {
-            stopTimer(A);
-            mNumberOfACK++;
-            System.out.println(mPacketsTransmitted + " aInput packet was ACK, stopping timer.\n");
+            if(!mTimerAvailable)
+            {
+                stopTimer(A);
+                mTimerAvailable = true;
+            }
 
-            // Remove message since it has been received by side B
-            if(!mMessageCache.isEmpty())
-                mMessageCache.pop();
-            mRetrieveFromCache = false;
-            nextSequenceNumber(A);
+            mPacketBuffer.poll();
+            mWindowFull = false;
+            mNumberOfACK++;
+            mBase++;
+            System.out.println("aInput: packet was ACK, stopping timer.\n");
         }
     }
     
@@ -280,15 +282,21 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // for how the timer is started and stopped. 
     protected void aTimerInterrupt()
     {
-        System.out.println("Timer expired, re-sending packet.");
-        toLayer3(A, mLastPacketSent);
+        System.out.println("Timer expired, re-transmitting window.");
 
-        startTimer(A, 50);
-        mTimeSent = getTime();
-        mPacketsTransmitted++;
+        for(Packet packet : mPacketBuffer)
+        {
+            toLayer3(A, packet);
+            mPacketsTransmitted++;
+            mTimeSent = getTime();
+            System.out.println("Re-sending: " + packet.toString());
 
-        if(mPacketDropped)
-            mNumberOfPacketsDropped++;
+            if(mTimerAvailable)
+            {
+                startTimer(A, 100);
+                mTimerAvailable = false;
+            }
+        }
     }
     
     // This routine will be called once, before any of your other A-side 
@@ -297,18 +305,21 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // of entity A).
     protected void aInit()
     {
+        // Initialize state variables
         mNextSequence = 0;
+        mBase = 0;
         mWindowFull = false;
-        mRetrieveFromCache = false;
-        mLastPacketSent = null;
-        mMessageCache = new Stack<Message>();
+        mTimerAvailable = true;
+
+        mPacketBuffer = new ArrayBlockingQueue<Packet>(WINDOW_SIZE);
+
+        // Initialize statistics variables
         mPacketsTransmitted = 0;
         mNumberOfACK = 0;
         mNumberOfPacketsDropped = 0;
         mTotalRTT = 0;
         mRTTCount = 0;
         mTimeSent = 0.0;
-        mPacketDropped = false;
     }
     
     // This routine will be called whenever a packet sent from the B-side 
@@ -319,8 +330,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     {
         System.out.println("bInput received packet: " + packet.toString());
 
-        String dummyData = "hello";
-        int checksum;
+        String payload = "data";
         Packet responsePacket;
 
         boolean corrupt = isPacketCorrupt(packet);
@@ -328,8 +338,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
 
         if(corrupt || retransmission)
         {
-            checksum = createChecksum(mLastACKSequence, 1, dummyData);
-            responsePacket = new Packet(mLastACKSequence, 1, checksum, dummyData);
+            responsePacket = createPacket(mLastACKSequence, payload);
 
             if(corrupt)
             {
@@ -339,7 +348,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
             else
             {
                 mRetransmissions++;
-                System.out.println("bInput: detected retransmitted packet, sending sequence of lastACK\n");
+                System.out.println("bInput: detected out of order packet, sending sequence of lastACK\n");
             }
         }
         else
@@ -348,13 +357,12 @@ public class StudentNetworkSimulator extends NetworkSimulator
             toLayer5(B, packet.getPayload());
 
             // Create ACK packet
-            checksum = createChecksum(mExpectedSequenceNumber, 1, dummyData);
-            responsePacket = new Packet(mExpectedSequenceNumber, 1, checksum, dummyData);
+            responsePacket = createPacket(mExpectedSequenceNumber, payload);
 
             // Move the expectedSequence forward
             mLastACKSequence = mExpectedSequenceNumber;
-            nextSequenceNumber(B);
-            System.out.println("bInput: packet is error free, sending ACK.\n");
+            mExpectedSequenceNumber++;
+            System.out.println("bInput: packet is error free, sending ACK packet.\n");
         }
 
         toLayer3(B, responsePacket);
