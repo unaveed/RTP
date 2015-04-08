@@ -220,7 +220,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 ++mNextSequence;
                 mPacketsTransmitted++;
                 System.out.println("aOutput sent packet: " + packet.toString());
-                System.out.println("Buffer size: " + mPacketBuffer.size() + "\n");
+//                System.out.println("Buffer size: " + mPacketBuffer.size() + "\n");
                 if(mTimerAvailable)
                 {
                     startTimer(A, TIME_UNITS);
@@ -255,10 +255,14 @@ public class StudentNetworkSimulator extends NetworkSimulator
         boolean outOfOrder = (packet.getSeqnum() >= mNextSequence) || (packet.getSeqnum() <= mBase);
 
         // Let timer expire for corrupt packets
-        if (isPacketCorrupt(packet) || outOfOrder)
+        if (isPacketCorrupt(packet))
         {
             mCorruptPacketsReceived++;
-            System.out.println("aInput found corrupt or out of order packet, let timer expire.\n");
+            System.out.println("aInput found corrupt packet, let timer expire.\n");
+        }
+        else if (outOfOrder)
+        {
+            System.out.println("aInput found out of order packet, let timer expire.\n");
         }
         // Handle packets that are ACK
         else
@@ -272,15 +276,15 @@ public class StudentNetworkSimulator extends NetworkSimulator
             // Difference between ACK sequence and base, is usually 1 but can be higher
             int ackDifference = packet.getSeqnum() - mBase;
 
-            // Need to pop off ackDifference amount of Packets that have been ACK'd
+            // Need to pop off ackDifference amount of Packets that have been acknowledged
             for(int i = 0; i < ackDifference; i++)
             {
                 Packet evictedPacket = mPacketBuffer.poll();
-                System.out.println("aInput: Popped off " + evictedPacket.toString());
+//                System.out.println("aInput: Popped off " + evictedPacket.toString());
+                mNumberOfACK++;
             }
 
             mWindowFull = false;
-            mNumberOfACK++;
             mBase += (packet.getSeqnum() - mBase);
             System.out.println("aInput: cumulative ACK received, stopping timer. Base: "
                     + mBase +  " and Next Sequence: " + mNextSequence + "\n");
@@ -296,6 +300,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
         mTimerAvailable = true;
         System.out.println("Timer expired, re-transmitting window.");
 
+        // Re-transmit all unacknowledged packets and restart timer
         for(Packet packet : mPacketBuffer)
         {
             toLayer3(A, packet);
@@ -341,7 +346,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // sent from the A-side.
     protected void bInput(Packet packet)
     {
-        System.out.println("bInput received packet: " + packet.toString());
+//        System.out.println("bInput received packet: " + packet.toString());
 
         String payload = "data";
         Packet responsePacket;
@@ -360,7 +365,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
             }
             else
             {
-                mRetransmissions++;
                 System.out.println("bInput: detected out of order packet, sending sequence of lastACK\n");
             }
         }
