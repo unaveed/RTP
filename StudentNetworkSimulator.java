@@ -1,3 +1,4 @@
+import java.util.HashMap;
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
 
@@ -15,9 +16,9 @@ public class StudentNetworkSimulator extends NetworkSimulator
      *
      * Predefined Member Methods:
      *
-     *  void stopTimer(int entity): 
+     *  void stopTimer(int entity):
      *       Stops the timer running at "entity" [A or B]
-     *  void startTimer(int entity, double increment): 
+     *  void startTimer(int entity, double increment):
      *       Starts a timer running at "entity" [A or B], which will expire in
      *       "increment" time units, causing the interrupt handler to be
      *       called.  You should only call this with A.
@@ -37,7 +38,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
      *
      *  Message: Used to encapsulate a message coming from layer 5
      *    Constructor:
-     *      Message(String inputData): 
+     *      Message(String inputData):
      *          creates a new Message containing "inputData"
      *    Methods:
      *      boolean setData(String inputData):
@@ -87,7 +88,8 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // Also add any necessary methods (e.g. checksum of a String)
 
     private final int ACK = 1;
-    private final int WINDOW_SIZE = 50;
+    private final int WINDOW_SIZE = 8;
+    private final int BUFFER_SIZE = 50;
     private final double TIME_UNITS = 50.0;
 
     private int mSequence;                  // Sequence number of individual packets
@@ -95,19 +97,20 @@ public class StudentNetworkSimulator extends NetworkSimulator
     private int mNextSequence;              // The next sequence number outside of the current window
     private int mExpectedSequenceNumber;    // The sequence number the receiver expects to receive
     private int mLastACKSequence;           // The last sequence that the receiver gave an ACK
-    private boolean mWindowFull;            // Determines whether the window is full
     private boolean mTimerAvailable;        // Used to coordinate whether the timer is currently in use
     private Queue<Packet> mPacketBuffer;    // Buffer to hold the messages that have no received ACK
 
     // Variables used for gathering statistics
-    private int mPacketsTransmitted;        // How many packets sent by aOutput
+    private int mPacketsTransmitted;        // Packets transmitted
     private int mNumberOfACK;               // Packets that received an ACK
     private int mRetransmissions;           // Packets that have been re-transmitted
     private int mCorruptPacketsReceived;    // Corrupt packets received
-    private int mNumberOfPacketsDropped;    // Number of packets dropped
+    private int mLostORCorrupt;             // How many times a re-transmit was necessary due to lost or corrupt packets
     private int mTotalRTT;                  // A sum of all RTTs
     private int mRTTCount;                  // Number of RTTs to calculate for average
-    private double mTimeSent;               // Keeps track of when the message was sent
+    private HashMap<Integer, Double>
+            mStartTimes;                    // Keeps track of start times for individual packets
+    private boolean mComments = false;       // For my use: turn on and off comments for debugging.
 
 
 
@@ -168,7 +171,6 @@ public class StudentNetworkSimulator extends NetworkSimulator
         }
         catch(IllegalStateException e)
         {
-            mWindowFull = true;
             return false;
         }
     }
@@ -197,7 +199,7 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 "Number of re-transmissions: " + mRetransmissions + "\n" +
                 "Number of ACK packets: " + mNumberOfACK + "\n" +
                 "Number of corrupt packets: " + mCorruptPacketsReceived + "\n" +
-                "Number of packets dropped: " + mNumberOfPacketsDropped + "\n" +
+                "Re-transmits due to corrupt or lost packets: " + (mLostORCorrupt) + "\n" +
                 "Average RTT: " + averageTime);
     }
 
@@ -207,62 +209,79 @@ public class StudentNetworkSimulator extends NetworkSimulator
     // the receiving upper layer.
     protected void aOutput(Message message)
     {
-        if(!mWindowFull && (mNextSequence - mBase) <= WINDOW_SIZE)
+        if((mNextSequence - mBase) < WINDOW_SIZE)
         {
-             // Create packet and send it to side B
+            // Create packet and send it to side B
             Packet packet = createPacket(mSequence++, message.getData());
+
             if(addToQueue(packet))
             {
                 toLayer3(A, packet);
-                mTimeSent = getTime();
+                mStartTimes.put(packet.getSeqnum(), getTime());
 
                 // Update state and statistics counter
                 ++mNextSequence;
                 mPacketsTransmitted++;
-                System.out.println("aOutput sent packet: " + packet.toString());
-//                System.out.println("Buffer size: " + mPacketBuffer.size() + "\n");
+
+                if(mComments)
+                    System.out.println("aOutput sent packet: " + packet.toString());
+                if(mComments)
+                    System.out.println("Window size: " + (mNextSequence - mBase) + "\n");
+
                 if(mTimerAvailable)
                 {
                     startTimer(A, TIME_UNITS);
-                    System.out.println("aOutput: started timer\n");
+//                    System.out.println("aOutput: started timer\n");
                     mTimerAvailable = false;
                 }
             }
             else
             {
-                System.out.println("aOutput: Buffer is full, dropping packet");
+                if(mComments)
+                    System.out.println("aOutput: Buffer is full, dropping message");
             }
-
         }
         else
         {
-            System.out.println("aOutput: Buffer is full, dropping message");
+            if(mComments)
+                System.out.println("aOutput: Window is full, dropping message");
         }
     }
 
-    // This routine will be called whenever a packet sent from the B-side 
+    // This routine will be called whenever a packet sent from the B-side
     // (i.e. as a result of a toLayer3() being done by a B-side procedure)
     // arrives at the A-side.  "packet" is the (possibly corrupted) packet
     // sent from the B-side.
     protected void aInput(Packet packet)
     {
-        System.out.println("aInput received packet: " + packet.toString());
+        if(mComments)
+            System.out.println("aInput received packet: " + packet.toString() + " base: " + mBase);
+
+        double arrivalTime = getTime();
+        int sequenceNumber = packet.getSeqnum();
+        Double startTime = mStartTimes.get(sequenceNumber);
 
         // Aggregate time round trips for each packet sent/received
-        mTotalRTT += getTime() - mTimeSent;
-        mRTTCount++;
+        if(startTime != null)
+        {
+            mTotalRTT += arrivalTime - startTime.doubleValue();
+            mRTTCount++;
+        }
 
-        boolean outOfOrder = (packet.getSeqnum() >= mNextSequence) || (packet.getSeqnum() <= mBase);
+        boolean outOfOrder = sequenceNumber <= mBase || sequenceNumber >= mNextSequence;
 
         // Let timer expire for corrupt packets
         if (isPacketCorrupt(packet))
         {
             mCorruptPacketsReceived++;
-            System.out.println("aInput found corrupt packet, let timer expire.\n");
+
+            if(mComments)
+                System.out.println("aInput found corrupt packet, let timer expire.\n");
         }
         else if (outOfOrder)
         {
-            System.out.println("aInput found out of order packet, let timer expire.\n");
+            if(mComments)
+                System.out.println("aInput found out of order or duplicate ACK, let timer expire.\n");
         }
         // Handle packets that are ACK
         else
@@ -273,40 +292,52 @@ public class StudentNetworkSimulator extends NetworkSimulator
                 mTimerAvailable = true;
             }
 
-            // Difference between ACK sequence and base, is usually 1 but can be higher
-            int ackDifference = packet.getSeqnum() - mBase;
-
-            // Need to pop off ackDifference amount of Packets that have been acknowledged
-            for(int i = 0; i < ackDifference; i++)
+            // Need to pop off all sequence numbers that have been acknowledged
+            while(!mPacketBuffer.isEmpty())
             {
-                Packet evictedPacket = mPacketBuffer.poll();
-//                System.out.println("aInput: Popped off " + evictedPacket.toString());
-                mNumberOfACK++;
+                if(mPacketBuffer.peek().getSeqnum() <= sequenceNumber)
+                {
+                    Packet evictedPacket = mPacketBuffer.poll();
+
+                    if (mComments)
+                        System.out.println("aInput: Popped off " + evictedPacket.toString());
+
+                    mStartTimes.remove(evictedPacket.getSeqnum());
+                }
+                else
+                {
+                    break;
+                }
             }
 
-            mWindowFull = false;
-            mBase += (packet.getSeqnum() - mBase);
-            System.out.println("aInput: cumulative ACK received, stopping timer. Base: "
-                    + mBase +  " and Next Sequence: " + mNextSequence + "\n");
+            mBase = packet.getSeqnum();
+
+            if(mComments)
+                System.out.println("aInput: cumulative ACK received, stopping timer. Next Sequence: "
+                        + mNextSequence + "\n");
         }
     }
-    
-    // This routine will be called when A's timer expires (thus generating a 
-    // timer interrupt). You'll probably want to use this routine to control 
+
+    // This routine will be called when A's timer expires (thus generating a
+    // timer interrupt). You'll probably want to use this routine to control
     // the retransmission of mUnsentMessages. See startTimer() and stopTimer(), above,
-    // for how the timer is started and stopped. 
+    // for how the timer is started and stopped.
     protected void aTimerInterrupt()
     {
         mTimerAvailable = true;
-        System.out.println("Timer expired, re-transmitting window.");
+        mLostORCorrupt++;
+        if(mComments)
+            System.out.println("Timer expired, re-transmitting window.");
 
         // Re-transmit all unacknowledged packets and restart timer
         for(Packet packet : mPacketBuffer)
         {
             toLayer3(A, packet);
             mRetransmissions++;
-            mTimeSent = getTime();
-            System.out.println("Re-sending: " + packet.toString());
+            mStartTimes.put(packet.getSeqnum(), getTime());
+
+            if(mComments)
+                System.out.println("Re-sending: " + packet.toString());
 
             if(mTimerAvailable)
             {
@@ -315,8 +346,8 @@ public class StudentNetworkSimulator extends NetworkSimulator
             }
         }
     }
-    
-    // This routine will be called once, before any of your other A-side 
+
+    // This routine will be called once, before any of your other A-side
     // routines are called. It can be used to do any required
     // initialization (e.g. of member variables you add to control the state
     // of entity A).
@@ -325,28 +356,28 @@ public class StudentNetworkSimulator extends NetworkSimulator
         // Initialize state variables
         mSequence = 0;
         mNextSequence = 0;
-        mBase = 0;
-        mWindowFull = false;
+        mBase = -1;
         mTimerAvailable = true;
 
-        mPacketBuffer = new ArrayBlockingQueue<Packet>(WINDOW_SIZE);
+        mPacketBuffer = new ArrayBlockingQueue<Packet>(BUFFER_SIZE);
 
         // Initialize statistics variables
         mPacketsTransmitted = 0;
         mNumberOfACK = 0;
-        mNumberOfPacketsDropped = 0;
+        mLostORCorrupt = 0;
         mTotalRTT = 0;
         mRTTCount = 0;
-        mTimeSent = 0.0;
+        mStartTimes = new HashMap<Integer, Double>();
     }
-    
-    // This routine will be called whenever a packet sent from the B-side 
+
+    // This routine will be called whenever a packet sent from the B-side
     // (i.e. as a result of a toLayer3() being done by an A-side procedure)
     // arrives at the B-side.  "packet" is the (possibly corrupted) packet
     // sent from the A-side.
     protected void bInput(Packet packet)
     {
-//        System.out.println("bInput received packet: " + packet.toString());
+        if(mComments)
+            System.out.println("bInput received packet: " + packet.toString());
 
         String payload = "data";
         Packet responsePacket;
@@ -359,14 +390,9 @@ public class StudentNetworkSimulator extends NetworkSimulator
             responsePacket = createPacket(mLastACKSequence, payload);
 
             if(corrupt)
-            {
                 mCorruptPacketsReceived++;
-                System.out.println("bInput: detected corrupt packet, sending sequence of lastACK\n");
-            }
-            else
-            {
-                System.out.println("bInput: detected out of order packet, sending sequence of lastACK\n");
-            }
+            if(mComments)
+                System.out.println("bInput: detected corrupt or out of order packet, sending sequence of lastACK\n");
         }
         else
         {
@@ -376,15 +402,20 @@ public class StudentNetworkSimulator extends NetworkSimulator
             // Create ACK packet
             responsePacket = createPacket(mExpectedSequenceNumber, payload);
 
-            // Move the expectedSequence forward
+            // Update state and statistics
             mLastACKSequence = mExpectedSequenceNumber++;
-            System.out.println("bInput: packet is error free, sending ACK packet.\n");
+            mNumberOfACK++;
+            mPacketsTransmitted++;
+
+            if(mComments)
+                System.out.println("bInput: packet is error free, sending ACK packet.\n");
         }
 
         toLayer3(B, responsePacket);
+        mPacketsTransmitted++;
     }
-    
-    // This routine will be called once, before any of your other B-side 
+
+    // This routine will be called once, before any of your other B-side
     // routines are called. It can be used to do any required
     // initialization (e.g. of member variables you add to control the state
     // of entity B).

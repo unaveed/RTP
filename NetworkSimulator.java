@@ -1,6 +1,4 @@
 import java.util.Random;
-import java.util.Vector;
-import java.util.Enumeration;
 
 public abstract class NetworkSimulator
 {
@@ -100,7 +98,7 @@ public abstract class NetworkSimulator
             // If we've reached the maximum message count, exit the main loop
             if (nSim >= maxMessages)
             {
-                break;
+                //break;
             }
             
             // Perform the appropriate action based on the event 
@@ -136,7 +134,10 @@ public abstract class NetworkSimulator
                     break;
                     
                 case FROMLAYER5:
-                    
+
+                    if (nSim >= maxMessages)
+                        continue;
+
                     // If a message has arrived from layer 5, we need to
                     // schedule the arrival of the next message
                     generateNextArrival();
